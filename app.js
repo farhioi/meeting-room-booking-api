@@ -7,6 +7,16 @@ app.use(express.json());
 let bookings = [];
 let nextId = 1;
 
+
+app.get("/health", (req, res) => {
+  res.status(200).json({
+    status: "ok",
+    timestamp: new Date().toISOString(),
+    uptimeSeconds: Math.round(process.uptime()),
+  });
+});
+
+
 // Helper: parse and validate times
 function parseTimes(startTime, endTime) {
   const start = parseIsoDate(startTime);
