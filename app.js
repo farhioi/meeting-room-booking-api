@@ -28,9 +28,14 @@ function parseTimes(startTime, endTime) {
 function hasOverlap(roomId, start, end) {
   return bookings.some((b) => {
     if (b.roomId !== roomId) return false;
+
     const existingStart = new Date(b.startTime);
     const existingEnd = new Date(b.endTime);
-    return start < existingEnd && end > existingStart;
+
+    // No overlap if the new booking ends before the existing starts,
+    // or starts after the existing ends.
+    const noOverlap = end <= existingStart || start >= existingEnd;
+    return !noOverlap;
   });
 }
 
