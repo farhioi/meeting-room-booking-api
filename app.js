@@ -7,7 +7,21 @@ app.use(express.json());
 let bookings = [];
 let nextId = 1;
 
+// --- Helpers ---
+function errorResponse(res, status, code, message) {
+  return res.status(status).json({ error: { code, message } });
+}
 
+function isNonEmptyString(value) {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function parseIsoDate(value) {
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+// Health endpoint
 app.get("/health", (req, res) => {
   res.status(200).json({
     status: "ok",
@@ -16,25 +30,39 @@ app.get("/health", (req, res) => {
   });
 });
 
-
-// Helper: parse and validate times
+// Parse and validate times
 function parseTimes(startTime, endTime) {
   const start = parseIsoDate(startTime);
   const end = parseIsoDate(endTime);
 
   if (!start || !end) {
-    return { error: { code: "INVALID_TIME_FORMAT", message: "startTime and endTime must be valid date-time values" } };
+    return {
+      error: {
+        code: "INVALID_TIME_FORMAT",
+        message: "startTime and endTime must be valid date-time values",
+      },
+    };
   }
   if (start >= end) {
-    return { error: { code: "INVALID_TIME_RANGE", message: "startTime must be before endTime" } };
+    return {
+      error: {
+        code: "INVALID_TIME_RANGE",
+        message: "startTime must be before endTime",
+      },
+    };
   }
   if (start < new Date()) {
-    return { error: { code: "TIME_IN_PAST", message: "Bookings must not be created in the past" } };
+    return {
+      error: {
+        code: "TIME_IN_PAST",
+        message: "Bookings must not be created in the past",
+      },
+    };
   }
   return { start, end };
 }
 
-// Helper: overlap check for a room
+// Overlap check
 function hasOverlap(roomId, start, end) {
   return bookings.some((b) => {
     if (b.roomId !== roomId) return false;
@@ -42,59 +70,95 @@ function hasOverlap(roomId, start, end) {
     const existingStart = new Date(b.startTime);
     const existingEnd = new Date(b.endTime);
 
-    // No overlap if the new booking ends before the existing starts,
-    // or starts after the existing ends.
     const noOverlap = end <= existingStart || start >= existingEnd;
     return !noOverlap;
   });
 }
 
-// Create a booking
-app.post("/bookings", (req, res) => {
-   const { roomId, startTime, endTime } = req.body;
-
+// Booking service functions
+function createBooking({ roomId, startTime, endTime }) {
   if (!isNonEmptyString(roomId)) {
-    return errorResponse(res, 400, "ROOM_ID_REQUIRED", "roomId is required and must be a non-empty string");
+    return {
+      error: {
+        status: 400,
+        code: "ROOM_ID_REQUIRED",
+        message: "roomId is required and must be a non-empty string",
+      },
+    };
   }
   if (!isNonEmptyString(startTime) || !isNonEmptyString(endTime)) {
-    return errorResponse(res, 400, "TIME_REQUIRED", "startTime and endTime are required");
+    return {
+      error: {
+        status: 400,
+        code: "TIME_REQUIRED",
+        message: "startTime and endTime are required",
+      },
+    };
   }
 
   const { start, end, error } = parseTimes(startTime, endTime);
-  if (error) return errorResponse(res, 400, error.code, error.message);
-
-
-   if (hasOverlap(roomId, start, end)) {
-    return errorResponse(res, 409, "OVERLAP", "Booking overlaps with an existing booking");
+  if (error) {
+    return { error: { status: 400, code: error.code, message: error.message } };
   }
 
+  const normalizedRoomId = roomId.trim();
+  if (hasOverlap(normalizedRoomId, start, end)) {
+    return {
+      error: {
+        status: 409,
+        code: "OVERLAP",
+        message: "Booking overlaps with an existing booking",
+      },
+    };
+  }
 
   const booking = {
     id: nextId++,
-    roomId,
+    roomId: normalizedRoomId,
     startTime: start.toISOString(),
     endTime: end.toISOString(),
   };
 
   bookings.push(booking);
-  return res.status(201).json(booking);
-});
+  return { booking };
+}
 
-// Cancel a booking
-app.delete("/bookings/:id", (req, res) => {
-  const id = Number(req.params.id);
+function deleteBookingById(id) {
   const index = bookings.findIndex((b) => b.id === id);
+  if (index === -1) {
+    return {
+      error: { status: 404, code: "NOT_FOUND", message: "Booking not found" },
+    };
+  }
+  bookings.splice(index, 1);
+  return { deleted: true };
+}
 
-    if (index === -1) {
-    return errorResponse(res, 404, "NOT_FOUND", "Booking not found");
+// --- Routes ---
+app.post("/bookings", (req, res) => {
+  const result = createBooking(req.body);
+
+  if (result.error) {
+    return errorResponse(res, result.error.status, result.error.code, result.error.message);
   }
 
+  return res.status(201).json(result.booking);
+});
 
-  bookings.splice(index, 1);
+app.delete("/bookings/:id", (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) {
+    return errorResponse(res, 400, "INVALID_ID", "Booking id must be a number");
+  }
+
+  const result = deleteBookingById(id);
+  if (result.error) {
+    return errorResponse(res, result.error.status, result.error.code, result.error.message);
+  }
+
   return res.status(204).send();
 });
 
-// List bookings for a meeting room
 app.get("/rooms/:roomId/bookings", (req, res) => {
   const { roomId } = req.params;
   const roomBookings = bookings
